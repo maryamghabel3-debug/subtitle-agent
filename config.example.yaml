@@ -1,0 +1,58 @@
+# ─────────────────────────────────────────────────────────────
+# کانفیگ نمونه — کپی کنید به config.yaml و مقادیر را تغییر دهید:
+#   cp config.example.yaml config.yaml
+# بعد: fa-subs run video.mp4 --config config.yaml
+# همه کلیدها اختیاری‌اند؛ مقادیر پیش‌فرض در config.py هست.
+# ─────────────────────────────────────────────────────────────
+
+# زبان‌ها
+source_language: "en"
+target_language: "fa"
+
+# ساخت زیرنویس از روی صدا (فقط وقتی فایل srt ندارید)
+# مدل‌های بزرگ‌تر دقیق‌تر ولی کندترند: tiny < base < small < medium < large-v3
+whisper_model: "small"
+whisper_device: "auto"        # auto | cuda | cpu
+
+# ── ترجمه ────────────────────────────────────────────────────
+# manual : فعلاً بدون API؛ اسکریپت وسط کار صبر می‌کند تا فایل .fa.srt
+#          را خودتان (یا با کمک یک دستیار هوش مصنوعی در چت) ترجمه کنید.
+# google : گوگل ترنسلیت رایگان (pip install ".[google]")
+# openai : هر API سازگار با OpenAI — وقتی کلید گرفتید فقط کافیست
+#          همین گزینه را فعال و متغیر محیطی کلید را تنظیم کنید.
+# none   : زیرنویس ورودی از قبل فارسی است.
+translation_provider: "manual"
+translation_model: "gpt-4o-mini"
+translation_api_base: "https://api.openai.com/v1"
+translation_api_key_env: "OPENAI_API_KEY"
+translation_batch_size: 20
+translation_style: "ساده، روان و مناسب زیرنویس؛ جمله‌ها کوتاه باشند"
+
+# ── ظاهر زیرنویس فارسی ───────────────────────────────────────
+font_name: "Vazirmatn"
+font_dir: "fonts"
+# font_size: 48              # خالی = خودکار بر اساس ارتفاع ویدیو
+position: "above_english"    # بالای زیرنویس انگلیسی چسبیده (دوزبانه)
+                             # گزینه‌های دیگر: bottom | top
+# margin_v: 180              # تنظیم دستی فاصله از لبه (پیکسل) — اگر فارسی
+                             # روی انگلیسی افتاد این را بیشتر کنید
+max_chars_per_line: 40
+primary_colour: "&H00FFFFFF" # سفید
+outline_colour: "&H00000000" # دورخط مشکی
+
+# ── خروجی ────────────────────────────────────────────────────
+# original = ابعاد خود ویدیو (عمودی→عمودی، افقی→افقی) ← پیش‌فرض
+# vertical = بوم عمودی 1080x1920 با پس‌زمینه تار شده
+# horizontal = بوم افقی 1920x1080 با پس‌زمینه تار شده
+output_mode: "original"
+make_full: true              # نسخه کامل برای یوتیوب
+make_parts: true             # قسمت‌های کوتاه برای ریلز/شورتس
+part_duration: 60            # طول هدف هر قسمت (ثانیه) — برای ۹۰ یا ۱۲۰ عوض کنید
+part_min_duration: 30
+part_max_duration: 90        # برش حداکثر تا اینجا عقب/جلو می‌رود تا جمله کامل شود
+show_part_title: true        # نمایش «قسمت n از m» اول هر قسمت
+part_title_template: "قسمت {n} از {total}"
+
+# ── کیفیت انکود ──────────────────────────────────────────────
+crf: 20                      # کمتر = کیفیت بالاتر و فایل حجیم‌تر (۱۸ تا ۲۳ معمول است)
+preset: "medium"

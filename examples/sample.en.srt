@@ -1,0 +1,16 @@
+1
+00:00:00,500 --> 00:00:03,000
+Welcome to this lesson.
+
+2
+00:00:03,200 --> 00:00:06,000
+Today we talk about focus.
+
+3
+00:00:06,200 --> 00:00:09,000
+Small steps every day
+make a big difference.
+
+4
+00:00:09,200 --> 00:00:12,000
+Let's get started.

@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fa-subtitle-pipeline"
+version = "0.1.0"
+description = "Burn Persian subtitles into videos (bilingual with the existing burned-in English) and split them into ~1-minute parts for Instagram Reels / YouTube Shorts"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [{ name = "fa-subtitle-pipeline contributors" }]
+dependencies = [
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+# Speech-to-text, only needed when you do NOT already have an .srt file
+whisper = ["faster-whisper>=1.0"]
+# Free Google Translate provider
+google = ["deep-translator>=1.11"]
+# Everything optional at once
+all = ["faster-whisper>=1.0", "deep-translator>=1.11"]
+dev = ["pytest>=8"]
+
+[project.scripts]
+fa-subs = "fa_subtitle_pipeline.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
