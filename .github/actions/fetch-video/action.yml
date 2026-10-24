@@ -1,0 +1,81 @@
+name: Fetch video input
+description: Download a video from a direct/platform/Google Drive URL or from a GitHub Release asset.
+
+inputs:
+  video_url:
+    description: Direct file URL, supported platform URL, or Google Drive sharing URL
+    required: false
+    default: ""
+  release_tag:
+    description: Existing GitHub Release tag that contains the video asset
+    required: false
+    default: ""
+  asset_name:
+    description: Exact video asset file name inside the release
+    required: false
+    default: ""
+  output_dir:
+    description: Directory used for the downloaded video
+    required: false
+    default: input
+
+outputs:
+  path:
+    description: Local path to the downloaded video
+    value: ${{ steps.fetch.outputs.path }}
+
+runs:
+  using: composite
+  steps:
+    - id: fetch
+      shell: bash
+      env:
+        VIDEO_URL: ${{ inputs.video_url }}
+        RELEASE_TAG: ${{ inputs.release_tag }}
+        ASSET_NAME: ${{ inputs.asset_name }}
+        OUTPUT_DIR: ${{ inputs.output_dir }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        mkdir -p "$OUTPUT_DIR"
+        video=""
+
+        if [[ -n "${VIDEO_URL}" ]]; then
+          if [[ "$VIDEO_URL" =~ (youtube\.com|youtu\.be|dailymotion\.com|dai\.ly|vimeo\.com|bilibili\.com|tiktok\.com|instagram\.com|facebook\.com|twitter\.com|x\.com) ]]; then
+            python -m pip install -q yt-dlp
+            yt-dlp \
+              --format "bv*+ba/best" \
+              --merge-output-format mp4 \
+              --output "$OUTPUT_DIR/video.%(ext)s" \
+              "$VIDEO_URL"
+          elif [[ "$VIDEO_URL" =~ (drive\.google\.com|docs\.google\.com) ]]; then
+            python -m pip install -q gdown
+            gdown --fuzzy "$VIDEO_URL" --output "$OUTPUT_DIR/video.mp4"
+          else
+            url_without_query="${VIDEO_URL%%\?*}"
+            file_name="${url_without_query##*/}"
+            if [[ -z "$file_name" || "$file_name" != *.* ]]; then
+              file_name="video.mp4"
+            fi
+            curl --location --fail --retry 3 \
+              --output "$OUTPUT_DIR/$file_name" \
+              "$VIDEO_URL"
+          fi
+          video="$(find "$OUTPUT_DIR" -maxdepth 1 -type f -print -quit)"
+        elif [[ -n "${RELEASE_TAG}" && -n "${ASSET_NAME}" ]]; then
+          gh release download "$RELEASE_TAG" \
+            --pattern "$ASSET_NAME" \
+            --dir "$OUTPUT_DIR"
+          video="$OUTPUT_DIR/$ASSET_NAME"
+        else
+          echo "::error::Provide either video_url, or both release_tag and asset_name."
+          exit 1
+        fi
+
+        if [[ -z "$video" || ! -s "$video" ]]; then
+          echo "::error::The video download did not produce a non-empty file."
+          exit 1
+        fi
+
+        ls -lh "$video"
+        echo "path=$video" >> "$GITHUB_OUTPUT"

@@ -1,0 +1,284 @@
+name: 01 آماده‌سازی زیرنویس و پیشنهاد برش‌ها
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_url:
+        description: "لینک ویدیو: مستقیم، پلتفرمی یا گوگل‌درایو؛ اگر خالی است از Release استفاده کنید"
+        required: false
+        type: string
+      release_tag:
+        description: "تگ Release موجودی که فایل ویدیو داخل آن آپلود شده است"
+        required: false
+        type: string
+      asset_name:
+        description: "نام دقیق فایل ویدیو داخل Release"
+        required: false
+        type: string
+      job_name:
+        description: "نام کوتاه کار برای نام فایل‌ها؛ خالی یعنی نام خود ویدیو"
+        required: false
+        type: string
+      source_language:
+        description: "زبان گفتار، مثل en یا zh یا ja؛ auto یعنی تشخیص خودکار"
+        required: true
+        default: en
+        type: string
+      whisper_model:
+        description: "مدل تشخیص گفتار؛ روی GitHub CPU مدل‌های بزرگ کند هستند"
+        required: true
+        default: small
+        type: choice
+        options:
+          - tiny
+          - base
+          - small
+          - medium
+          - large-v3
+          - turbo
+      translation_mode:
+        description: "auto یعنی با کلید API ترجمه کن و اگر کلید نبود قالب دستی بساز"
+        required: true
+        default: auto
+        type: choice
+        options:
+          - auto
+          - manual
+      translation_model:
+        description: "مدل API ترجمه"
+        required: true
+        default: gpt-4o-mini
+        type: string
+      translation_api_base:
+        description: "آدرس API سازگار با OpenAI"
+        required: true
+        default: https://api.openai.com/v1
+        type: string
+      part_target:
+        description: "طول هدف هر قسمت به ثانیه"
+        required: true
+        default: "90"
+        type: string
+      part_min:
+        description: "کوتاه‌ترین طول مجاز هر قسمت به ثانیه"
+        required: true
+        default: "45"
+        type: string
+      part_max:
+        description: "بلندترین طول مجاز هر قسمت به ثانیه"
+        required: true
+        default: "150"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: ساخت SRT مبدأ، قالب فارسی و برش‌های پیشنهادی
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+
+    steps:
+      - name: دریافت کد ریپو
+        uses: actions/checkout@v4
+
+      - name: نصب Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: نصب FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: نصب پروژه و Faster-Whisper
+        run: python -m pip install -e ".[whisper]"
+
+      - name: کش مدل Whisper
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: faster-whisper-${{ inputs.whisper_model }}-${{ runner.os }}
+          restore-keys: |
+            faster-whisper-
+
+      - name: دریافت ویدیو
+        id: input
+        uses: ./.github/actions/fetch-video
+        with:
+          video_url: ${{ inputs.video_url }}
+          release_tag: ${{ inputs.release_tag }}
+          asset_name: ${{ inputs.asset_name }}
+          output_dir: input
+
+      - name: آماده‌سازی نام کار و پوشه‌ها
+        id: meta
+        env:
+          VIDEO: ${{ steps.input.outputs.path }}
+          JOB_NAME: ${{ inputs.job_name }}
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          stem = os.environ.get("JOB_NAME", "").strip() or Path(os.environ["VIDEO"]).stem
+          stem = re.sub(r'[^\w .\-]+', "-", stem, flags=re.UNICODE).strip(" .-") or "video"
+          Path("job").mkdir(parents=True, exist_ok=True)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"stem={stem}\n")
+          print(f"JOB stem: {stem}")
+          PY
+
+      - name: بررسی وجود کلید API بدون نمایش مقدار آن
+        id: api
+        env:
+          HAS_OPENAI_KEY: ${{ secrets.OPENAI_API_KEY != '' }}
+        run: echo "available=$HAS_OPENAI_KEY" >> "$GITHUB_OUTPUT"
+
+      - name: تشخیص گفتار و ساخت زیرنویس زبان مبدأ
+        env:
+          VIDEO: ${{ steps.input.outputs.path }}
+          STEM: ${{ steps.meta.outputs.stem }}
+          SOURCE_LANGUAGE: ${{ inputs.source_language }}
+          WHISPER_MODEL: ${{ inputs.whisper_model }}
+        run: |
+          fa-subs transcribe "$VIDEO" \
+            --out "job/${STEM}.source.srt" \
+            --language "$SOURCE_LANGUAGE" \
+            --whisper-model "$WHISPER_MODEL"
+
+      - name: پیشنهاد برش‌ها از روی مکث‌ها و سکوت‌ها
+        env:
+          VIDEO: ${{ steps.input.outputs.path }}
+          STEM: ${{ steps.meta.outputs.stem }}
+          PART_TARGET: ${{ inputs.part_target }}
+          PART_MIN: ${{ inputs.part_min }}
+          PART_MAX: ${{ inputs.part_max }}
+        run: |
+          fa-subs suggest-cuts "$VIDEO" \
+            --srt "job/${STEM}.source.srt" \
+            --out "job/${STEM}.cuts.suggested.txt" \
+            --target "$PART_TARGET" \
+            --min-duration "$PART_MIN" \
+            --max-duration "$PART_MAX"
+
+      - name: ساخت قالب فارسی با همان زمان‌بندی
+        env:
+          STEM: ${{ steps.meta.outputs.stem }}
+        run: |
+          cp \
+            "job/${STEM}.source.srt" \
+            "job/${STEM}.fa.srt"
+
+      - name: ساخت کانفیگ موقت ترجمه API
+        if: inputs.translation_mode == 'auto' && steps.api.outputs.available == 'true'
+        env:
+          SOURCE_LANGUAGE: ${{ inputs.source_language }}
+          TRANSLATION_MODEL: ${{ inputs.translation_model }}
+          TRANSLATION_API_BASE: ${{ inputs.translation_api_base }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          import yaml
+
+          config = {
+              "source_language": os.environ["SOURCE_LANGUAGE"],
+              "target_language": "fa",
+              "translation_provider": "auto",
+              "translation_model": os.environ["TRANSLATION_MODEL"],
+              "translation_api_base": os.environ["TRANSLATION_API_BASE"],
+              "translation_api_key_env": "OPENAI_API_KEY",
+              "translation_batch_size": 20,
+          }
+          Path("job/translation-config.yaml").write_text(
+              yaml.safe_dump(config, allow_unicode=True, sort_keys=False),
+              encoding="utf-8",
+          )
+          PY
+
+      - name: ترجمه خودکار با API
+        if: inputs.translation_mode == 'auto' && steps.api.outputs.available == 'true'
+        env:
+          STEM: ${{ steps.meta.outputs.stem }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          fa-subs translate "job/${STEM}.source.srt" \
+            --out "job/${STEM}.fa.srt" \
+            --provider auto \
+            --config job/translation-config.yaml
+
+      - name: ساخت راهنمای قدم بعدی
+        env:
+          STEM: ${{ steps.meta.outputs.stem }}
+          TRANSLATION_MODE: ${{ inputs.translation_mode }}
+          API_AVAILABLE: ${{ steps.api.outputs.available }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          stem = os.environ["STEM"]
+          translated = (
+              os.environ.get("TRANSLATION_MODE") == "auto"
+              and os.environ.get("API_AVAILABLE") == "true"
+          )
+          if translated:
+              fa_status = "این فایل با API به فارسی ترجمه شده است؛ قبل از رندر نهایی اسم‌ها و خط‌های مهم را نمونه‌خوانی کنید."
+          else:
+              fa_status = "این فایل فعلاً قالب است: زمان‌بندی آماده است ولی متن‌ها هنوز زبان مبدأ هستند. فقط متن هر خط را فارسی کنید و شماره و زمان‌ها را تغییر ندهید."
+
+          text = f"""# قدم بعدی چیست؟
+
+          خروجی این مرحله در Artifact همین اجرای GitHub Actions قرار گرفته است.
+
+          ## فایل‌ها
+
+          - `{stem}.source.srt`: زیرنویس استخراج‌شده از گفتار ویدیو.
+          - `{stem}.fa.srt`: {fa_status}
+          - `{stem}.cuts.suggested.txt`: پایان پیشنهادی هر قسمت، بر اساس مکث، سکوت و پایان جمله.
+
+          ## کاری که باید انجام دهید
+
+          1. Artifact را از پایین صفحهٔ همین Run دانلود کنید.
+          2. اگر فایل فارسی هنوز قالب است، آن را ترجمه کنید؛ می‌توانید فایل را برای دستیار در چت بفرستید.
+          3. فایل برش‌ها را باز کنید. هر خط پایان یک قسمت است؛ زمان‌ها را می‌توانید جابه‌جا کنید یا خطی را حذف/اضافه کنید.
+          4. برای ساخت خروجی نهایی، ورک‌فلوی «02 ساخت خروجی نهایی و قسمت‌ها» را اجرا کنید و همان ویدیو + فایل فارسی نهایی + فایل برش تأییدشده را به آن بدهید.
+
+          ## نکتهٔ حریم خصوصی
+
+          اگر ریپو Public باشد، Artifact این مرحله، فایل‌هایی که در Release می‌گذارید و خروجی Release مرحلهٔ دوم می‌توانند برای عموم قابل مشاهده یا دانلود باشند. برای ویدیوهای خصوصی یا حساس، ریپو را Private کنید یا از مسیر Colab/Drive استفاده کنید.
+          """
+          Path("job/NEXT_STEPS_FA.md").write_text(text, encoding="utf-8")
+          PY
+          rm -f job/*.wav
+
+      - name: آپلود نتیجه آماده‌سازی
+        uses: actions/upload-artifact@v4
+        with:
+          name: subtitle-prep-${{ steps.meta.outputs.stem }}
+          path: |
+            job/${{ steps.meta.outputs.stem }}.source.srt
+            job/${{ steps.meta.outputs.stem }}.fa.srt
+            job/${{ steps.meta.outputs.stem }}.cuts.suggested.txt
+            job/NEXT_STEPS_FA.md
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: خلاصه اجرا
+        env:
+          STEM: ${{ steps.meta.outputs.stem }}
+        run: |
+          {
+            echo "## آماده‌سازی تمام شد ✅"
+            echo
+            echo "Artifact با نام **subtitle-prep-${STEM}** را از پایین همین صفحه دانلود کنید."
+            echo
+            echo "داخل آن زیرنویس مبدأ، قالب/ترجمه فارسی و برش‌های پیشنهادی قرار دارد."
+            echo "قدم بعدی و راهنمای کامل داخل فایل NEXT_STEPS_FA.md است."
+          } >> "$GITHUB_STEP_SUMMARY"

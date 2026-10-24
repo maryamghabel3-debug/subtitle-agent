@@ -34,8 +34,11 @@ def transcribe(media: Path, cfg: PipelineConfig) -> list[SubtitleEntry]:
     device, compute = _resolve_device(cfg)
     print(f"🎙️  Whisper [{cfg.whisper_model}] روی {device} ({compute}) ...")
     model = WhisperModel(cfg.whisper_model, device=device, compute_type=compute)
+    language = cfg.source_language
+    if language and language.lower() in ("auto", "detect"):
+        language = None  # let Whisper detect the spoken language
     segments, _info = model.transcribe(
-        str(media), language=cfg.source_language or None, vad_filter=True
+        str(media), language=language or None, vad_filter=True
     )
     entries = [
         SubtitleEntry(i + 1, float(s.start), float(s.end), s.text.strip())

@@ -1,4 +1,4 @@
-"""Command-line interface: fa-subs run | transcribe | translate | burn | doctor"""
+"""Command-line interface: fa-subs run | transcribe | suggest-cuts | translate | burn | doctor"""
 from __future__ import annotations
 
 import argparse
@@ -26,6 +26,8 @@ def _overrides_from(args, names) -> dict:
 def _cmd_run(args) -> int:
     cfg = load_config(args.config, _overrides_from(args, [
         "translation_provider", "output_mode", "position", "part_duration",
+        "part_min_duration", "part_max_duration", "split_mode",
+        "silence_noise_db", "silence_min_duration", "pause_min_gap",
         "whisper_model", "font_size", "margin_v", "font_dir",
     ]))
     if args.no_full:
@@ -36,7 +38,8 @@ def _cmd_run(args) -> int:
         cfg.show_part_title = False
     try:
         run_pipeline(args.video, cfg, en_srt=args.en_srt, fa_srt=args.fa_srt,
-                     output_dir=args.output_dir, force=args.force)
+                     output_dir=args.output_dir, force=args.force,
+                     cuts_file=args.cuts)
     except PipelinePaused as paused:
         print("\n" + str(paused))
         return 2
@@ -53,9 +56,60 @@ def _cmd_transcribe(args) -> int:
     audio = media.extract_audio(
         media_path, work / f"{media_path.stem}.wav", media.find_ffmpeg(cfg.ffmpeg_path)
     )
-    out = Path(args.out) if args.out else Path(f"{media_path.stem}.en.srt")
+    lang_tag = (cfg.source_language or "src").lower()
+    if lang_tag in ("auto", "detect"):
+        lang_tag = "src"
+    out = Path(args.out) if args.out else Path(f"{media_path.stem}.{lang_tag}.srt")
     transcribe_to_srt(audio, out, cfg)
     print(f"✅ {out}")
+    return 0
+
+
+def _cmd_suggest_cuts(args) -> int:
+    from . import media
+    from .cuts import format_hms, suggest_segments, write_cuts_file
+    from .srt_io import read_srt
+
+    cfg = load_config(args.config, _overrides_from(args, [
+        "silence_noise_db", "silence_min_duration", "pause_min_gap",
+    ]))
+    video = Path(args.video)
+    if not video.exists():
+        raise FileNotFoundError(f"ویدیو پیدا نشد: {video}")
+    ffmpeg = media.find_ffmpeg(cfg.ffmpeg_path)
+    ffprobe = media.find_ffprobe(cfg.ffprobe_path)
+    info = media.probe(video, ffmpeg, ffprobe)
+    entries = read_srt(args.srt) if args.srt else []
+    try:
+        silences = media.detect_silences(
+            video,
+            ffmpeg,
+            noise_db=cfg.silence_noise_db,
+            min_silence=cfg.silence_min_duration,
+        )
+    except RuntimeError as exc:
+        print(f"⚠️  تشخیص سکوت انجام نشد ({exc})؛ فقط از مکث بین زیرنویس‌ها استفاده می‌شود.")
+        silences = []
+    segments = suggest_segments(
+        entries,
+        silences,
+        info.duration,
+        target_duration=args.target,
+        min_duration=args.min_duration,
+        max_duration=args.max_duration,
+        min_gap=cfg.pause_min_gap,
+    )
+    out = Path(args.out) if args.out else Path(f"{video.stem}.cuts.suggested.txt")
+    write_cuts_file(out, segments, entries)
+    print(f"🎬 مدت ویدیو: {format_hms(info.duration)}")
+    print(f"🔇 {len(silences)} بازهٔ سکوت صوتی پیدا شد.")
+    for seg in segments:
+        print(
+            f"  قسمت {seg.index}: {format_hms(seg.start)} → "
+            f"{format_hms(seg.end)} ({seg.duration:.1f} ثانیه)"
+        )
+    print(f"✅ فایل برش‌های پیشنهادی: {out}")
+    print("آن را بازبینی/ویرایش کنید و در اجرای نهایی با --cuts بدهید.")
     return 0
 
 
@@ -64,11 +118,16 @@ def _cmd_translate(args) -> int:
     from .translate import get_provider
 
     cfg = load_config(args.config, _overrides_from(args, ["translation_provider"]))
-    if cfg.translation_provider in ("manual", "none"):
-        print("⚠️  برای ترجمه خودکار --provider را google یا openai بگذارید.")
-        return 2
     provider = get_provider(cfg)
-    assert provider is not None
+    if provider is None:
+        if cfg.translation_provider == "auto":
+            print(
+                "⚠️  حالت auto است ولی کلید API تنظیم نشده؛ برای ترجمه خودکار "
+                "کلید را تنظیم کنید یا --provider google/openai بگذارید."
+            )
+        else:
+            print("⚠️  برای ترجمه خودکار --provider را auto، google یا openai بگذارید.")
+        return 2
     entries = provider.translate(read_srt(args.input))
     write_srt(entries, args.out)
     print(f"✅ {args.out} ({len(entries)} خط)")
@@ -123,7 +182,7 @@ def _cmd_doctor(args) -> int:
           f"{'(نصب است)' if importlib.util.find_spec('deep_translator') else '(نصب نیست؛ فقط برای --provider google)'}")
     has_key = bool(os.environ.get(cfg.translation_api_key_env))
     print(f"{'✅' if has_key else 'ℹ️ '} کلید API ({cfg.translation_api_key_env}) "
-          f"{'(تنظیم شده)' if has_key else '(تنظیم نشده؛ فقط برای --provider openai لازم است)'}")
+          f"{'(تنظیم شده)' if has_key else '(تنظیم نشده؛ برای --provider auto/openai لازم است)'}")
     print("\nهمه‌چیز برای شروع آماده است 🎉" if ok else "\n⚠️ موارد ❌ را از README رفع کنید.")
     return 0 if ok else 1
 
@@ -131,23 +190,31 @@ def _cmd_doctor(args) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fa-subs",
-        description="زیرنویس چسبیده فارسی + برش ~۱ دقیقه‌ای برای ریلز/شورتس و نسخه کامل یوتیوب",
+        description="زیرنویس چسبیده فارسی + برش مکث‌محور برای ریلز/شورتس و نسخه کامل یوتیوب",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("run", help="اجرای کامل پایپ‌لاین روی یک ویدیو")
     p.add_argument("video")
-    p.add_argument("--en-srt", help="زیرنویس انگلیسی آماده (مثلاً خروجی Subtitle Edit)؛ اگر ندهید با Whisper ساخته می‌شود")
+    p.add_argument("--en-srt", help="زیرنویس زبان مبدأ آماده (نام گزینه برای سازگاری en مانده)؛ اگر ندهید با Whisper ساخته می‌شود")
     p.add_argument("--fa-srt", help="زیرنویس فارسی آماده؛ اگر بدهید مرحله ترجمه رد می‌شود")
+    p.add_argument("--cuts", help="فایل برش‌های تأییدشده (.txt یا .json)؛ اگر بدهید دقیقاً همان برش‌ها استفاده می‌شوند")
     p.add_argument("--output-dir", help="پوشه خروجی (پیش‌فرض: output/<نام ویدیو>)")
     p.add_argument("--provider", dest="translation_provider", choices=ALL_PROVIDERS,
-                   help="روش ترجمه (پیش‌فرض: manual؛ بعداً با کلید API: openai)")
+                   help="روش ترجمه: manual=دستی/چت، auto=API اگر کلید بود وگرنه دستی، google/openai=خودکار")
     p.add_argument("--output-mode", choices=OUTPUT_MODES,
                    help="original=ابعاد خود ویدیو (پیش‌فرض) | vertical=۹:۱۶ | horizontal=۱۶:۹")
     p.add_argument("--position", choices=("above_english", "bottom", "top"),
                    help="جای زیرنویس فارسی (پیش‌فرض: above_english یعنی بالای انگلیسی)")
     p.add_argument("--part-duration", type=float, help="طول هدف هر قسمت به ثانیه (پیش‌فرض: ۶۰)")
+    p.add_argument("--part-min-duration", type=float, help="کوتاه‌ترین طول مجاز قسمت به ثانیه")
+    p.add_argument("--part-max-duration", type=float, help="بلندترین طول مجاز قسمت به ثانیه")
+    p.add_argument("--split-mode", choices=("subtitle", "pause"),
+                   help="subtitle=نزدیک‌ترین مرز زیرنویس؛ pause=مکث طبیعی/سکوت/پایان جمله")
+    p.add_argument("--silence-noise-db", type=float, help="آستانه تشخیص سکوت به dB (پیش‌فرض: -35)")
+    p.add_argument("--silence-min-duration", type=float, help="حداقل طول سکوت به ثانیه (پیش‌فرض: 0.6)")
+    p.add_argument("--pause-min-gap", type=float, help="حداقل فاصله بین دو زیرنویس برای مکث (پیش‌فرض: 0.5)")
     p.add_argument("--whisper-model", help="مدل Whisper (پیش‌فرض: small)")
     p.add_argument("--font-size", type=int)
     p.add_argument("--margin-v", type=int, help="فاصله زیرنویس فارسی از لبه، به پیکسل")
@@ -159,15 +226,29 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common(p)
     p.set_defaults(func=_cmd_run)
 
-    p = sub.add_parser("transcribe", help="فقط ساخت زیرنویس انگلیسی از روی صدا (Whisper)")
+    p = sub.add_parser("transcribe", help="فقط ساخت زیرنویس از روی صدای گفتار (Whisper)")
     p.add_argument("video")
     p.add_argument("--out", help="مسیر خروجی .srt")
     p.add_argument("--whisper-model")
-    p.add_argument("--language", dest="source_language")
+    p.add_argument("--language", dest="source_language",
+                   help="زبان گفتار مثل en یا zh؛ auto یعنی تشخیص خودکار")
     _add_common(p)
     p.set_defaults(func=_cmd_transcribe)
 
-    p = sub.add_parser("translate", help="ترجمه یک فایل srt به فارسی (google/openai)")
+    p = sub.add_parser("suggest-cuts", help="پیشنهاد برش قسمت‌ها از روی مکث‌ها و سکوت‌ها (برای بازبینی شما)")
+    p.add_argument("video")
+    p.add_argument("--srt", help="زیرنویس زبان مبدأ (اختیاری، ولی دقت پیشنهاد را بالا می‌برد)")
+    p.add_argument("--out", help="مسیر خروجی .txt یا .json (پیش‌فرض: <نام ویدیو>.cuts.suggested.txt)")
+    p.add_argument("--target", type=float, default=90.0, help="طول هدف هر قسمت به ثانیه (پیش‌فرض: 90)")
+    p.add_argument("--min-duration", type=float, default=45.0, help="کوتاه‌ترین قسمت (پیش‌فرض: 45)")
+    p.add_argument("--max-duration", type=float, default=150.0, help="بلندترین قسمت (پیش‌فرض: 150)")
+    p.add_argument("--silence-noise-db", type=float, help="آستانه تشخیص سکوت به dB")
+    p.add_argument("--silence-min-duration", type=float, help="حداقل طول سکوت به ثانیه")
+    p.add_argument("--pause-min-gap", type=float, help="حداقل فاصله بین دو زیرنویس برای مکث")
+    _add_common(p)
+    p.set_defaults(func=_cmd_suggest_cuts)
+
+    p = sub.add_parser("translate", help="ترجمه یک فایل srt به فارسی (auto/google/openai)")
     p.add_argument("input")
     p.add_argument("--out", required=True)
     p.add_argument("--provider", dest="translation_provider", choices=ALL_PROVIDERS, default="google")

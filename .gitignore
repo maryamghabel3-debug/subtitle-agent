@@ -8,6 +8,9 @@ venv/
 
 # Project outputs / inputs — never commit videos or API keys
 output/
+input/
+job/
+*.zip
 *.mp4
 *.mkv
 *.mov

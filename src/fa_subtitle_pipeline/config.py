@@ -18,6 +18,7 @@ class PipelineConfig:
 
     # --- translation -----------------------------------------------------
     # manual : stop at a checkpoint, you (or an AI chat) translate the .srt
+    # auto   : openai when the API-key env var is set, otherwise manual
     # google : free Google Translate via deep-translator (quality: medium)
     # openai : any OpenAI-compatible Chat Completions API (needs an API key)
     # none   : the provided SRT is already Persian
@@ -50,6 +51,14 @@ class PipelineConfig:
     part_duration: float = 60.0         # target seconds per part
     part_min_duration: float = 30.0
     part_max_duration: float = 90.0
+    # subtitle: cut at the subtitle boundary nearest the target (legacy)
+    # pause   : cut on natural pauses (subtitle gaps + real silences +
+    #           sentence endings); suggested cuts are written to the work
+    #           dir either way, and `run --cuts FILE` uses an approved file.
+    split_mode: str = "subtitle"        # subtitle | pause
+    silence_noise_db: float = -35.0     # silencedetect threshold (dB)
+    silence_min_duration: float = 0.6   # silencedetect minimum length (s)
+    pause_min_gap: float = 0.5          # min subtitle gap counted as a pause
     show_part_title: bool = True
     part_title_template: str = "قسمت {n} از {total}"
 

@@ -1,6 +1,6 @@
-"""fa-subtitle-pipeline: add burned-in Persian subtitles and split videos
-into ~1-minute parts for Instagram Reels / YouTube Shorts + a full version
-for YouTube. Designed for source videos that already have burned-in English
-subtitles (kept visible: bilingual output)."""
+"""fa-subtitle-pipeline: transcribe clear speech, translate it to Persian,
+burn bilingual Persian subtitles over the existing burned-in English, and
+split at reviewed natural pauses for Instagram Reels / YouTube Shorts plus a
+full YouTube version."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

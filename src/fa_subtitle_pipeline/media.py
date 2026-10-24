@@ -155,6 +155,52 @@ def extract_audio(video: Path, wav_out: Path, ffmpeg: str) -> Path:
     return wav_out
 
 
+_SILENCE_START_RE = re.compile(r"silence_start:\s*([\d.]+)")
+_SILENCE_END_RE = re.compile(r"silence_end:\s*([\d.]+)")
+
+
+def parse_silencedetect(stderr_text: str) -> list[tuple[float, float]]:
+    """Parse ffmpeg silencedetect log lines into (start, end) pairs."""
+    silences: list[tuple[float, float]] = []
+    pending: float | None = None
+    for line in stderr_text.splitlines():
+        start_match = _SILENCE_START_RE.search(line)
+        if start_match:
+            pending = float(start_match[1])
+            continue
+        end_match = _SILENCE_END_RE.search(line)
+        if end_match and pending is not None:
+            end = float(end_match[1])
+            if end > pending:
+                silences.append((pending, end))
+            pending = None
+    return silences
+
+
+def detect_silences(
+    media_path: str | Path,
+    ffmpeg: str,
+    noise_db: float = -35.0,
+    min_silence: float = 0.6,
+) -> list[tuple[float, float]]:
+    """Return real audio silences via ffmpeg's silencedetect filter.
+
+    Runs an audio-only decode pass, so it stays fast even on long videos.
+    Background music can mask dialogue pauses; callers should combine this
+    with subtitle-gap pauses (see cuts.find_candidates).
+    """
+    result = subprocess.run(
+        [ffmpeg, "-hide_banner", "-i", str(media_path), "-vn",
+         "-af", f"silencedetect=noise={noise_db:g}dB:d={min_silence:g}",
+         "-f", "null", "-"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        tail = "\n".join((result.stderr or "").strip().splitlines()[-10:])
+        raise RuntimeError(f"تشخیص سکوت با ffmpeg ناموفق بود:\n{tail}")
+    return parse_silencedetect(result.stderr or "")
+
+
 def render(
     video: Path,
     out: Path,

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fa-subtitle-pipeline"
-version = "0.1.0"
-description = "Burn Persian subtitles into videos (bilingual with the existing burned-in English) and split them into ~1-minute parts for Instagram Reels / YouTube Shorts"
+version = "0.2.0"
+description = "Transcribe clear speech, translate to Persian, burn bilingual subtitles, and split at reviewed natural pauses for Instagram Reels / YouTube Shorts"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"

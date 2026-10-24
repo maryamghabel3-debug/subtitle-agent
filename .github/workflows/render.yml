@@ -1,0 +1,335 @@
+name: 02 ساخت خروجی نهایی و قسمت‌ها
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_url:
+        description: "لینک همان ویدیو؛ اگر خالی است از Release استفاده کنید"
+        required: false
+        type: string
+      release_tag:
+        description: "تگ Release ورودی؛ در این حالت فایل فارسی و برش هم می‌توانند داخل همان Release باشند"
+        required: false
+        type: string
+      asset_name:
+        description: "نام دقیق فایل ویدیو داخل Release"
+        required: false
+        type: string
+      fa_srt_url:
+        description: "لینک مستقیم فایل زیرنویس فارسی نهایی"
+        required: false
+        type: string
+      fa_srt_path:
+        description: "مسیر فایل فارسی داخل خود ریپو، اگر قبلاً در ریپو آپلودش کرده‌اید"
+        required: false
+        type: string
+      cuts_url:
+        description: "لینک مستقیم فایل برش تأییدشده .txt یا .json"
+        required: false
+        type: string
+      cuts_path:
+        description: "مسیر فایل برش داخل خود ریپو، اگر قبلاً در ریپو آپلودش کرده‌اید"
+        required: false
+        type: string
+      job_name:
+        description: "نام کوتاه کار؛ بهتر است دقیقاً همان نام مرحله آماده‌سازی باشد"
+        required: false
+        type: string
+      make_full:
+        description: "نسخه کامل هم ساخته شود؟"
+        required: true
+        default: true
+        type: boolean
+      split_mode:
+        description: "اگر فایل برش تأییدشده نباشد، برش خودکار با کدام روش انجام شود؟"
+        required: true
+        default: pause
+        type: choice
+        options:
+          - pause
+          - subtitle
+      part_target:
+        description: "طول هدف هر قسمت به ثانیه"
+        required: true
+        default: "90"
+        type: string
+      part_min:
+        description: "کوتاه‌ترین طول مجاز هر قسمت به ثانیه"
+        required: true
+        default: "45"
+        type: string
+      part_max:
+        description: "بلندترین طول مجاز هر قسمت به ثانیه"
+        required: true
+        default: "150"
+        type: string
+      position:
+        description: "جای زیرنویس فارسی نسبت به انگلیسی سوخته"
+        required: true
+        default: above_english
+        type: choice
+        options:
+          - above_english
+          - bottom
+          - top
+      margin_v:
+        description: "فاصله دستی از لبه به پیکسل؛ خالی یعنی خودکار"
+        required: false
+        type: string
+      preset:
+        description: "سرعت انکود روی GitHub؛ veryfast برای ویدیوهای بلند عملی‌تر است"
+        required: true
+        default: veryfast
+        type: choice
+        options:
+          - ultrafast
+          - superfast
+          - veryfast
+          - faster
+          - fast
+          - medium
+      crf:
+        description: "کیفیت خروجی؛ عدد کمتر یعنی کیفیت و حجم بالاتر"
+        required: true
+        default: "21"
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  render:
+    name: چسباندن فارسی، ساخت نسخه کامل و برش قسمت‌ها
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+
+    steps:
+      - name: دریافت کد ریپو
+        uses: actions/checkout@v4
+
+      - name: نصب Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: نصب FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: نصب پروژه
+        run: python -m pip install -e .
+
+      - name: دریافت ویدیو
+        id: input
+        uses: ./.github/actions/fetch-video
+        with:
+          video_url: ${{ inputs.video_url }}
+          release_tag: ${{ inputs.release_tag }}
+          asset_name: ${{ inputs.asset_name }}
+          output_dir: input
+
+      - name: آماده‌سازی نام کار و پوشه‌ها
+        id: meta
+        env:
+          VIDEO: ${{ steps.input.outputs.path }}
+          JOB_NAME: ${{ inputs.job_name }}
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          stem = os.environ.get("JOB_NAME", "").strip() or Path(os.environ["VIDEO"]).stem
+          stem = re.sub(r'[^\w .\-]+', "-", stem, flags=re.UNICODE).strip(" .-") or "video"
+          Path("job").mkdir(parents=True, exist_ok=True)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"stem={stem}\n")
+          print(f"JOB stem: {stem}")
+          PY
+
+      - name: پیدا کردن زیرنویس فارسی و فایل برش تأییدشده
+        id: subtitle_inputs
+        env:
+          FA_SRT_URL: ${{ inputs.fa_srt_url }}
+          FA_SRT_PATH: ${{ inputs.fa_srt_path }}
+          CUTS_URL: ${{ inputs.cuts_url }}
+          CUTS_PATH: ${{ inputs.cuts_path }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p job/release
+
+          download_file() {
+            local url="$1"
+            local destination="$2"
+            if [[ "$url" =~ (drive\.google\.com|docs\.google\.com) ]]; then
+              python -m pip install -q gdown
+              gdown --fuzzy "$url" --output "$destination"
+            else
+              curl --location --fail --retry 3 --output "$destination" "$url"
+            fi
+          }
+
+          fa_srt=""
+          if [[ -n "${FA_SRT_URL}" ]]; then
+            fa_srt="job/input.fa.srt"
+            download_file "$FA_SRT_URL" "$fa_srt"
+          elif [[ -n "${FA_SRT_PATH}" ]]; then
+            fa_srt="$FA_SRT_PATH"
+          elif [[ -n "${RELEASE_TAG}" ]]; then
+            gh release download "$RELEASE_TAG" \
+              --pattern "*.fa.srt" \
+              --dir job/release || true
+            fa_srt="$(find job/release -maxdepth 1 -type f -name '*.fa.srt' -print | sort | head -n 1)"
+          fi
+
+          if [[ -z "$fa_srt" || ! -s "$fa_srt" ]]; then
+            echo "::error::Persian .fa.srt was not found. Provide fa_srt_url/fa_srt_path, or add a *.fa.srt asset to the same input Release."
+            exit 1
+          fi
+
+          cuts=""
+          if [[ -n "${CUTS_URL}" ]]; then
+            if [[ "$CUTS_URL" =~ \.json(\?|$) ]]; then
+              cuts="job/approved-cuts.json"
+            else
+              cuts="job/approved-cuts.txt"
+            fi
+            download_file "$CUTS_URL" "$cuts"
+          elif [[ -n "${CUTS_PATH}" ]]; then
+            cuts="$CUTS_PATH"
+          elif [[ -n "${RELEASE_TAG}" ]]; then
+            gh release download "$RELEASE_TAG" \
+              --pattern "*cuts*.txt" \
+              --dir job/release || true
+            gh release download "$RELEASE_TAG" \
+              --pattern "*cuts*.json" \
+              --dir job/release || true
+            cuts="$(find job/release -maxdepth 1 -type f \( -name '*cuts*.txt' -o -name '*cuts*.json' \) -print | sort | head -n 1)"
+          fi
+
+          if [[ -n "$cuts" && ! -s "$cuts" ]]; then
+            echo "::error::The approved cuts file was specified but is missing or empty: $cuts"
+            exit 1
+          fi
+
+          echo "fa_srt=$fa_srt" >> "$GITHUB_OUTPUT"
+          echo "cuts=$cuts" >> "$GITHUB_OUTPUT"
+          ls -lh "$fa_srt"
+          if [[ -n "$cuts" ]]; then ls -lh "$cuts"; fi
+
+      - name: ساخت کانفیگ رندر
+        env:
+          SPLIT_MODE: ${{ inputs.split_mode }}
+          PART_TARGET: ${{ inputs.part_target }}
+          PART_MIN: ${{ inputs.part_min }}
+          PART_MAX: ${{ inputs.part_max }}
+          POSITION: ${{ inputs.position }}
+          MARGIN_V: ${{ inputs.margin_v }}
+          PRESET: ${{ inputs.preset }}
+          CRF: ${{ inputs.crf }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          import yaml
+
+          config = {
+              "output_mode": "original",
+              "position": os.environ["POSITION"],
+              "split_mode": os.environ["SPLIT_MODE"],
+              "part_duration": float(os.environ["PART_TARGET"]),
+              "part_min_duration": float(os.environ["PART_MIN"]),
+              "part_max_duration": float(os.environ["PART_MAX"]),
+              "preset": os.environ["PRESET"],
+              "crf": int(os.environ["CRF"]),
+              "font_dir": "fonts",
+          }
+          margin = os.environ.get("MARGIN_V", "").strip()
+          if margin:
+              config["margin_v"] = int(margin)
+          Path("job/render-config.yaml").write_text(
+              yaml.safe_dump(config, allow_unicode=True, sort_keys=False),
+              encoding="utf-8",
+          )
+          PY
+
+      - name: اجرای پایپ‌لاین نهایی
+        env:
+          VIDEO: ${{ steps.input.outputs.path }}
+          FA_SRT: ${{ steps.subtitle_inputs.outputs.fa_srt }}
+          CUTS: ${{ steps.subtitle_inputs.outputs.cuts }}
+          STEM: ${{ steps.meta.outputs.stem }}
+          MAKE_FULL: ${{ inputs.make_full }}
+        run: |
+          set -euo pipefail
+          args=(
+            run "$VIDEO"
+            --config job/render-config.yaml
+            --fa-srt "$FA_SRT"
+            --output-dir "output/$STEM"
+          )
+          if [[ -n "${CUTS}" ]]; then
+            args+=(--cuts "$CUTS")
+          fi
+          if [[ "${MAKE_FULL}" != "true" ]]; then
+            args+=(--no-full)
+          fi
+          fa-subs "${args[@]}"
+
+      - name: انتشار خروجی‌ها در یک Release تازه
+        id: release
+        env:
+          STEM: ${{ steps.meta.outputs.stem }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mapfile -t videos < <(find "output/$STEM" -maxdepth 2 -type f -name '*.mp4' | sort)
+          if [[ ${#videos[@]} -eq 0 ]]; then
+            echo "::error::No MP4 output was produced."
+            exit 1
+          fi
+
+          files=("${videos[@]}")
+          for extra in "output/$STEM/manifest.json" "output/$STEM/captions.txt"; do
+            if [[ -s "$extra" ]]; then files+=("$extra"); fi
+          done
+          while IFS= read -r extra; do
+            files+=("$extra")
+          done < <(find "output/$STEM/work" -maxdepth 1 -type f \( -name '*.fa.srt' -o -name '*.cuts.suggested.txt' \) | sort)
+
+          tag="outputs-$(date -u +%Y%m%d-%H%M%S)-${GITHUB_RUN_ID}"
+          release_url="$(gh release create "$tag" "${files[@]}" \
+            --title "خروجی زیرنویس فارسی: $STEM" \
+            --notes "خروجی خودکار پایپ‌لاین زیرنویس فارسی شامل نسخه کامل (در صورت فعال بودن)، قسمت‌های برش‌خورده، manifest و کپشن‌ها.")"
+          echo "url=$release_url" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: آپلود فایل‌های اطلاعاتی خروجی
+        uses: actions/upload-artifact@v4
+        with:
+          name: subtitle-output-info-${{ steps.meta.outputs.stem }}
+          path: |
+            output/${{ steps.meta.outputs.stem }}/manifest.json
+            output/${{ steps.meta.outputs.stem }}/captions.txt
+            output/${{ steps.meta.outputs.stem }}/work/*.fa.srt
+            output/${{ steps.meta.outputs.stem }}/work/*.cuts.suggested.txt
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: خلاصه اجرا
+        env:
+          RELEASE_URL: ${{ steps.release.outputs.url }}
+        run: |
+          {
+            echo "## خروجی نهایی ساخته شد ✅"
+            echo
+            echo "دانلود ویدیوها از Release:"
+            echo "$RELEASE_URL"
+            echo
+            echo "اگر ریپو Public است، این Release و فایل‌هایش عمومی هستند."
+          } >> "$GITHUB_STEP_SUMMARY"
