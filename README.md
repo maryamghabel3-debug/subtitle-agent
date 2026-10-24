@@ -27,6 +27,17 @@
 
 ---
 
+## 🧭 وضعیت فعلی پروژه: فاز صفر — سنجش تقاضا
+
+قبل از ساخت اپ پولی یا فروش اشتراک، اول با کلیپ‌های زیرنویس‌دار در اینستاگرام و یوتیوب می‌سنجیم آیا برای این ژانرها مخاطب فارسی‌زبان کافی هست یا نه:
+
+- برنامه و معیارهای تصمیم: [`validation/VALIDATION_PLAN.md`](validation/VALIDATION_PLAN.md)
+- صفحه نمونه جمع‌آوری علاقه‌مندی و نظرسنجی: [`validation/landing/index.html`](validation/landing/index.html)
+- فایل ثبت نتایج: [`validation/content_metrics.csv`](validation/content_metrics.csv)
+- قالب بریف و مجوز هر ویدیو: [`validation/video-brief-template.md`](validation/video-brief-template.md)
+
+اپ/وب‌سایت اشتراکی، درگاه پرداخت و هاست استریم فقط بعد از سبز شدن این فاز و مشخص بودن مجوز هر اثر ساخته می‌شوند.
+
 ## 🚀 نصب
 
 **نیازمندی‌ها:** پایتون ۳.۱۰ به بالا + [FFmpeg](https://ffmpeg.org/download.html) (نسخه دارای `libass`)
